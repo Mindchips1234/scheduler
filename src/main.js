@@ -3,6 +3,9 @@ import { parseCommand } from './parser.js';
 import { store, sameDay } from './store.js';
 import { listen, speak, voiceSupported } from './voice.js';
 import { ALERT_OPTIONS, describeAlert, dueAlerts, nextAlert, buildIcs } from './reminders.js';
+import { REPEAT_OPTIONS, presetOf, repeatFromPreset, describeRepeat, nextOccurrence, fromKey } from './recurrence.js';
+import { holidaysOn } from './holidays.js';
+import { getSettings, setSettings, holidayRegion, speechRegion } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,6 +22,13 @@ const fmtTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2
 const fmtWeekday = new Intl.DateTimeFormat(undefined, { weekday: 'narrow' });
 
 const TYPE_ICON = { event: '📅', reminder: '🔔', task: '✅' };
+const lowerFirst = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
+const escapeHtml =(s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function dayHolidays(d) {
+  const s = getSettings();
+  return holidaysOn(d, holidayRegion(s), s.observances);
+}
 
 // ---------- rendering ----------
 
@@ -34,56 +44,62 @@ function renderWeekdays() {
 function renderGrid() {
   const { viewMonth } = state;
   $('month-label').textContent = fmtMonth.format(viewMonth);
-  const first = new Date(viewMonth);
-  const start = new Date(first);
-  start.setDate(1 - first.getDay());
+  const start = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1 - viewMonth.getDay());
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 41);
   const today = new Date();
-  const events = store.all();
+
+  // Count occurrences per day once for the whole 6-week grid.
+  const counts = new Map();
+  for (const inst of store.between(start, end)) counts.set(inst.occ, (counts.get(inst.occ) || 0) + 1);
 
   const cells = [];
   for (let i = 0; i < 42; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const count = events.filter((e) => e.start && sameDay(new Date(e.start), d)).length;
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const count = counts.get(key) || 0;
+    const hols = dayHolidays(d);
     const cls = [
       'day',
       d.getMonth() !== viewMonth.getMonth() && 'other',
       sameDay(d, today) && 'today',
       sameDay(d, state.selected) && 'selected',
+      hols.some((h) => h.kind === 'holiday') ? 'holiday' : hols.length ? 'observance' : '',
     ].filter(Boolean).join(' ');
-    const dots = count ? `<i class="dots">${'•'.repeat(Math.min(count, 3))}</i>` : '';
-    cells.push(`<button class="${cls}" data-date="${d.toISOString()}"><b>${d.getDate()}</b>${dots}</button>`);
+    const dots = count ? `<i class="dots">${'•'.repeat(Math.min(count, 3))}</i>` : '<i class="dots"></i>';
+    const title = hols.length ? ` title="${escapeHtml(hols.map((h) => h.name).join(', '))}"` : '';
+    cells.push(`<button class="${cls}" data-date="${d.toISOString()}"${title}><b>${d.getDate()}</b>${dots}</button>`);
   }
   $('grid').innerHTML = cells.join('');
 }
 
 function itemHtml(e) {
   let when = e.allDay || !e.start ? 'All day' : fmtTime.format(new Date(e.start)) + (e.end ? ' – ' + fmtTime.format(new Date(e.end)) : '');
+  if (e.repeat) when += ` · 🔁 ${escapeHtml(describeRepeat(e.repeat, e.start))}`;
   const alert = describeAlert(e.alertMinutes);
   if (alert && e.start) when += ` · 🔔 ${alert}`;
   const ics = e.start ? '<button class="ics" data-act="ics" aria-label="Add to phone calendar" title="Add to phone calendar">📲</button>' : '';
-  return `<li class="item ${e.done ? 'done' : ''}" data-id="${e.id}">
+  return `<li class="item ${e.done ? 'done' : ''}" data-id="${e.eventId || e.id}" data-occ="${e.occ || ''}">
     <button class="check" data-act="toggle" aria-label="Mark done">${TYPE_ICON[e.type] || '📅'}</button>
-    <div class="body"><span class="title"></span><span class="when">${when}</span></div>
+    <div class="body"><span class="title">${escapeHtml(e.title)}</span><span class="when">${when}</span></div>
     ${ics}
     <button class="del" data-act="delete" aria-label="Delete">✕</button>
   </li>`;
 }
 
-function fillList(ul, items) {
-  ul.innerHTML = items.map(itemHtml).join('');
-  // Set titles via textContent so user text is never interpreted as HTML.
-  items.forEach((e, i) => { ul.children[i].querySelector('.title').textContent = e.title; });
+function holidayHtml(h) {
+  return `<li class="item holiday-item ${h.kind}"><span class="check">${h.kind === 'holiday' ? '🎉' : '⭐'}</span>
+    <div class="body"><span class="title">${escapeHtml(h.name)}</span><span class="when">${h.kind === 'holiday' ? 'Public holiday' : 'Important day'}</span></div></li>`;
 }
 
 function renderAgenda() {
   $('day-label').textContent = fmtDay.format(state.selected);
+  const hols = dayHolidays(state.selected);
   const items = store.onDay(state.selected);
-  fillList($('day-list'), items);
-  if (!items.length) $('day-list').innerHTML = '<li class="empty">Nothing planned.</li>';
+  const html = hols.map(holidayHtml).join('') + items.map(itemHtml).join('');
+  $('day-list').innerHTML = html || '<li class="empty">Nothing planned.</li>';
   const undated = store.undated();
   $('undated-wrap').hidden = !undated.length;
-  fillList($('undated-list'), undated);
+  $('undated-list').innerHTML = undated.map(itemHtml).join('');
 }
 
 function render() {
@@ -101,9 +117,37 @@ function setStatus(msg) {
   $('status').textContent = msg;
 }
 
+/** Small bottom sheet with buttons; resolves to the chosen value (or null). */
+function askChoice(text, options) {
+  return new Promise((resolve) => {
+    $('choice-text').textContent = text;
+    $('choice-buttons').innerHTML = options
+      .map((o, i) => `<button data-i="${i}" class="${o.style || 'ghost'}">${escapeHtml(o.label)}</button>`)
+      .join('');
+    $('choice').hidden = false;
+    $('choice-buttons').onclick = (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      $('choice').hidden = true;
+      resolve(options[Number(btn.dataset.i)].value);
+    };
+  });
+}
+
 // ---------- preview / confirm ----------
 
 const pad = (n) => String(n).padStart(2, '0');
+const toDateInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+function fillRepeatSelect(repeat, start) {
+  const preset = presetOf(repeat, start);
+  const opts = [...REPEAT_OPTIONS];
+  if (preset === 'custom') opts.push({ value: 'custom', label: describeRepeat({ ...repeat, until: null }, start) });
+  $('p-repeat').innerHTML = opts.map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('');
+  $('p-repeat').value = preset;
+  $('p-until').value = repeat && repeat.until ? toDateInput(new Date(repeat.until)) : '';
+  $('p-until-wrap').hidden = preset === 'none';
+}
 
 function openPreview(item, heard) {
   state.pending = item;
@@ -117,12 +161,13 @@ function openPreview(item, heard) {
   $('p-alert').value = alertVal;
   if (item.start) {
     const d = new Date(item.start);
-    $('p-date').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    $('p-date').value = toDateInput(d);
     $('p-time').value = item.allDay ? '' : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   } else {
     $('p-date').value = '';
     $('p-time').value = '';
   }
+  fillRepeatSelect(item.repeat, item.start);
   $('preview').hidden = false;
 }
 
@@ -153,18 +198,109 @@ function savePreview() {
     }
     start = s.toISOString();
   }
+
+  let repeat = start ? repeatFromPreset($('p-repeat').value, item.repeat) : null;
+  if (repeat) {
+    if ($('p-until').value) {
+      const [y, m, d] = $('p-until').value.split('-').map(Number);
+      repeat.until = new Date(y, m - 1, d).toISOString();
+    } else {
+      delete repeat.until;
+    }
+    // A weekly custom rule keeps its weekdays; plain weekly follows the chosen date.
+    if ($('p-repeat').value !== 'custom' && $('p-repeat').value !== 'weekdays') delete repeat.byDay;
+  }
+
   const alertStr = $('p-alert').value;
   const alertMinutes = start && alertStr !== '' ? Number(alertStr) : null;
-  const ev = store.add({ title, type: $('p-type').value, start, end, allDay, alertMinutes, notified: false });
+  const ev = store.add({ title, type: $('p-type').value, start, end, allDay, alertMinutes, notified: false, repeat: repeat || null });
   closePreview();
-  if (ev.start) selectDate(new Date(ev.start));
+
+  const first = ev.repeat ? nextOccurrence(ev, new Date(ev.start)) : ev;
+  if (first && first.start) selectDate(new Date(first.start));
   else render();
-  const msg = `Saved “${ev.title}”${ev.start ? ' for ' + describe(ev) : ''}.`;
+  let msg = `Saved “${ev.title}”`;
+  if (ev.repeat) msg += ` — ${lowerFirst(describeRepeat(ev.repeat, ev.start))}${ev.allDay ? '' : ' at ' + fmtTime.format(new Date(ev.start))}`;
+  else if (ev.start) msg += ` for ${describe(ev)}`;
+  msg += '.';
   setStatus(msg);
   speak(msg);
   // Ask for notification permission the first time an alert is set (this runs inside the Save tap).
   if (alertMinutes != null && notifySupported() && Notification.permission === 'default') requestNotify();
   checkAlerts();
+}
+
+function describe(ev) {
+  const d = new Date(ev.start);
+  return fmtDay.format(d) + (ev.allDay ? '' : ' at ' + fmtTime.format(d));
+}
+
+// ---------- deleting ----------
+
+async function deleteItem(id, occ) {
+  const ev = store.get(id);
+  if (!ev) return;
+  if (ev.repeat) {
+    const day = occ ? fromKey(occ) : null;
+    const choice = await askChoice(`“${ev.title}” repeats (${lowerFirst(describeRepeat(ev.repeat, ev.start))}). What should be deleted?`, [
+      ...(day ? [{ label: `Only ${fmtDay.format(day)}`, value: 'one' }] : []),
+      { label: 'All repeats', value: 'all', style: 'danger' },
+      { label: 'Cancel', value: null },
+    ]);
+    if (choice === 'one') store.removeOccurrence(id, occ);
+    if (choice === 'all') store.remove(id);
+    if (!choice) return;
+    setStatus(choice === 'all' ? `Deleted every “${ev.title}”.` : `Deleted “${ev.title}” on ${fmtDay.format(day)}.`);
+  } else {
+    store.remove(id);
+    setStatus(`Deleted “${ev.title}”.`);
+  }
+  render();
+}
+
+// ---------- commands ----------
+
+function handle(text) {
+  const cmd = parseCommand(text, new Date(), { region: speechRegion() });
+  if (cmd.action === 'none') return;
+
+  if (cmd.action === 'add') {
+    openPreview(cmd.item, cmd.heard);
+    setStatus('Check the details and tap Save.');
+    return;
+  }
+
+  if (cmd.action === 'query') {
+    selectDate(cmd.date);
+    const hols = dayHolidays(cmd.date).map((h) => h.name);
+    const items = store.onDay(cmd.date).map((e) => (e.allDay ? e.title : `${e.title} at ${fmtTime.format(new Date(e.start))}`));
+    const all = [...hols, ...items];
+    const msg = all.length ? `${fmtDay.format(cmd.date)}: ${all.join(', ')}.` : `Nothing planned on ${fmtDay.format(cmd.date)}.`;
+    setStatus(msg);
+    speak(msg);
+    return;
+  }
+
+  if (cmd.action === 'delete') {
+    const matches = store.find(cmd.query, cmd.date);
+    if (!matches.length) {
+      setStatus(`Couldn't find anything matching “${cmd.query}”.`);
+      return;
+    }
+    // Prefer the soonest upcoming match.
+    const now = new Date();
+    const ranked = matches
+      .map((ev) => ({ ev, inst: ev.repeat ? nextOccurrence(ev, cmd.date || now) : ev }))
+      .filter((x) => x.inst)
+      .sort((a, b) => {
+        const fa = a.inst.start && new Date(a.inst.start) >= now ? 0 : 1;
+        const fb = b.inst.start && new Date(b.inst.start) >= now ? 0 : 1;
+        return fa - fb || (a.inst.start || '').localeCompare(b.inst.start || '');
+      });
+    const target = (ranked[0] || { ev: matches[0], inst: matches[0] });
+    if (target.ev.repeat) return deleteItem(target.ev.id, target.inst.occ);
+    if (confirm(`Delete “${target.ev.title}”${target.ev.start ? ' on ' + describe(target.ev) : ''}?`)) deleteItem(target.ev.id);
+  }
 }
 
 // ---------- notifications ----------
@@ -173,10 +309,23 @@ const notifySupported = () => 'Notification' in window;
 const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
-function updateBell() {
-  const on = notifySupported() && Notification.permission === 'granted';
-  $('bell').textContent = on ? '🔔' : '🔕';
-  $('bell').setAttribute('aria-label', on ? 'Notifications on' : 'Turn on notifications');
+function updateNotifyRow() {
+  let text;
+  let btn = 'Turn on';
+  if (!notifySupported()) {
+    text = isIos && !isStandalone() ? 'Add Scheduler to your Home Screen first, then open it from there.' : 'Not supported in this browser.';
+    btn = 'Why?';
+  } else if (Notification.permission === 'granted') {
+    text = 'On — alerts show while Scheduler is open or recently used.';
+    btn = 'Test';
+  } else if (Notification.permission === 'denied') {
+    text = 'Blocked — allow notifications for this site in your browser settings.';
+    btn = 'Help';
+  } else {
+    text = 'Off';
+  }
+  $('notify-state').textContent = text;
+  $('notify-btn').textContent = btn;
 }
 
 async function requestNotify() {
@@ -195,7 +344,7 @@ async function requestNotify() {
     return;
   }
   const result = await Notification.requestPermission();
-  updateBell();
+  updateNotifyRow();
   setStatus(result === 'granted'
     ? 'Notifications on. Alerts show while Scheduler is open or recently used — tap 📲 on an item for a guaranteed phone-calendar alarm.'
     : 'Notifications not allowed. You can still use 📲 to add items to your phone’s calendar.');
@@ -213,24 +362,28 @@ async function notify({ id, title, body }) {
 let alertTimer = null;
 
 function checkAlerts() {
+  const now = new Date();
   const events = store.all();
-  const { show, missed } = dueAlerts(events);
+  const maxAlert = Math.max(0, ...events.map((e) => Number(e.alertMinutes) || 0));
+  const horizon = new Date(now.getTime() + (maxAlert + 2 * 1440) * 60000);
+  const instances = store.between(new Date(now.getTime() - 86400000), horizon);
+  const { show, missed } = dueAlerts(instances, now);
   const canNotify = notifySupported() && Notification.permission === 'granted';
 
-  for (const ev of show) {
-    store.update(ev.id, { notified: true }); // mark first so two tabs don't both alert
-    const body = ev.allDay ? 'Today' : fmtTime.format(new Date(ev.start)) + (ev.alertMinutes ? ` (${describeAlert(ev.alertMinutes)})` : '');
-    if (canNotify) notify({ id: ev.id, title: `${TYPE_ICON[ev.type] || '🔔'} ${ev.title}`, body });
-    if (document.visibilityState === 'visible') speak(`Reminder: ${ev.title}`);
+  for (const inst of show) {
+    store.markNotified(inst); // mark first so two tabs don't both alert
+    const body = inst.allDay ? 'Today' : fmtTime.format(new Date(inst.start)) + (inst.alertMinutes ? ` (${describeAlert(inst.alertMinutes)})` : '');
+    if (canNotify) notify({ id: `${inst.eventId}|${inst.occ}`, title: `${TYPE_ICON[inst.type] || '🔔'} ${inst.title}`, body });
+    if (document.visibilityState === 'visible') speak(`Reminder: ${inst.title}`);
   }
-  for (const ev of missed) store.update(ev.id, { notified: true });
+  for (const inst of missed) store.markNotified(inst);
   if (show.length) setStatus('🔔 ' + show.map((e) => e.title).join(', '));
   else if (missed.length) setStatus(`While you were away: ${missed.map((e) => e.title).join(', ')}.`);
   if (show.length || missed.length) render();
 
-  // Wake up exactly when the next alert is due (capped; also re-checked every 30s).
+  // Wake up exactly when the next alert is due (also re-checked every 30s).
   clearTimeout(alertTimer);
-  const next = nextAlert(store.all());
+  const next = nextAlert(store.between(now, horizon), now);
   if (next) alertTimer = setTimeout(checkAlerts, Math.min(Math.max(next - Date.now(), 0) + 250, 2 ** 31 - 1));
 }
 
@@ -244,51 +397,31 @@ function downloadIcs(ev) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
-  setStatus('Open the downloaded file to add it (with its alarm) to your phone’s calendar.');
+  setStatus(ev.repeat
+    ? 'Open the downloaded file to add it — with all its repeats and its alarm — to your phone’s calendar.'
+    : 'Open the downloaded file to add it (with its alarm) to your phone’s calendar.');
 }
 
-function describe(ev) {
-  const d = new Date(ev.start);
-  return fmtDay.format(d) + (ev.allDay ? '' : ' at ' + fmtTime.format(d));
+// ---------- settings ----------
+
+function openSettings() {
+  const s = getSettings();
+  $('s-holidays').value = s.holidays;
+  $('s-observances').checked = s.observances;
+  $('s-observances').disabled = s.holidays === 'off';
+  updateNotifyRow();
+  $('settings').hidden = false;
 }
 
-// ---------- commands ----------
-
-function handle(text) {
-  const cmd = parseCommand(text);
-  if (cmd.action === 'none') return;
-
-  if (cmd.action === 'add') {
-    openPreview(cmd.item, cmd.heard);
-    setStatus('Check the details and tap Save.');
-    return;
-  }
-
-  if (cmd.action === 'query') {
-    selectDate(cmd.date);
-    const items = store.onDay(cmd.date);
-    const msg = items.length
-      ? `${fmtDay.format(cmd.date)}: ` + items.map((e) => (e.allDay ? e.title : `${e.title} at ${fmtTime.format(new Date(e.start))}`)).join(', ') + '.'
-      : `Nothing planned on ${fmtDay.format(cmd.date)}.`;
-    setStatus(msg);
-    speak(msg);
-    return;
-  }
-
-  if (cmd.action === 'delete') {
-    const matches = store.find(cmd.query, cmd.date);
-    if (!matches.length) {
-      setStatus(`Couldn't find anything matching “${cmd.query}”.`);
-      return;
-    }
-    const target = matches.find((e) => e.start && new Date(e.start) >= new Date()) || matches[0];
-    if (confirm(`Delete “${target.title}”${target.start ? ' on ' + describe(target) : ''}?`)) {
-      store.remove(target.id);
-      render();
-      setStatus(`Deleted “${target.title}”.`);
-    }
-  }
-}
+$('settings-btn').onclick = openSettings;
+$('settings-close').onclick = () => { $('settings').hidden = true; };
+$('notify-btn').onclick = async () => { await requestNotify(); updateNotifyRow(); };
+$('s-holidays').onchange = () => {
+  setSettings({ holidays: $('s-holidays').value });
+  $('s-observances').disabled = $('s-holidays').value === 'off';
+  render();
+};
+$('s-observances').onchange = () => { setSettings({ observances: $('s-observances').checked }); render(); };
 
 // ---------- events ----------
 
@@ -304,19 +437,20 @@ $('grid').onclick = (e) => {
 document.querySelector('.agenda').onclick = (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
-  const id = btn.closest('.item').dataset.id;
-  const ev = store.all().find((x) => x.id === id);
+  const li = btn.closest('.item');
+  const id = li.dataset.id;
+  const occ = li.dataset.occ || null;
+  const ev = store.get(id);
   if (!ev) return;
   if (btn.dataset.act === 'ics') return downloadIcs(ev);
-  if (btn.dataset.act === 'delete') store.remove(id);
-  if (btn.dataset.act === 'toggle') store.update(id, { done: !ev.done });
+  if (btn.dataset.act === 'delete') return deleteItem(id, occ);
+  if (btn.dataset.act === 'toggle') store.toggleDone(id, occ);
   render();
 };
 
-$('bell').onclick = requestNotify;
-
 $('p-save').onclick = savePreview;
 $('p-cancel').onclick = () => { closePreview(); setStatus('Cancelled.'); };
+$('p-repeat').onchange = () => { $('p-until-wrap').hidden = $('p-repeat').value === 'none'; };
 
 function submitText() {
   const text = $('text-input').value;
@@ -353,19 +487,26 @@ if (!voiceSupported) {
 }
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if (import.meta.env.PROD) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  } else {
+    // In development the offline cache would serve stale source files.
+    navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister()));
+    caches?.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+  }
 }
 
-// Opened from a notification tap: jump to that item's day.
+// Opened from a notification tap: jump to that occurrence's day.
 navigator.serviceWorker?.addEventListener('message', (e) => {
-  if (e.data?.type !== 'open-item') return;
-  const ev = store.all().find((x) => x.id === e.data.id);
+  if (e.data?.type !== 'open-item' || !e.data.id) return;
+  const [id, occ] = String(e.data.id).split('|');
+  if (occ) return selectDate(fromKey(occ));
+  const ev = store.get(id);
   if (ev?.start) selectDate(new Date(ev.start));
 });
 
 renderWeekdays();
 render();
-updateBell();
 checkAlerts();
 setInterval(checkAlerts, 30000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlerts(); });

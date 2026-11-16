@@ -17,7 +17,7 @@
       <h1 id="month-label">Scheduler</h1>
       <button class="icon-btn" id="next" aria-label="Next month">›</button>
       <button class="today-btn" id="today">Today</button>
-      <button class="icon-btn bell" id="bell" aria-label="Notifications">🔕</button>
+      <button class="icon-btn gear" id="settings-btn" aria-label="Settings">⚙️</button>
     </header>
 
     <main>
@@ -54,10 +54,42 @@
           </label>
           <label>Alert <select id="p-alert"></select></label>
         </div>
+        <div class="row">
+          <label>Repeat <select id="p-repeat"></select></label>
+          <label id="p-until-wrap">Until (optional) <input id="p-until" type="date" /></label>
+        </div>
         <div class="row actions">
           <button id="p-cancel" class="ghost">Cancel</button>
           <button id="p-save" class="primary">Save</button>
         </div>
+      </div>
+    </div>
+
+    <div class="preview" id="settings" hidden>
+      <div class="preview-card">
+        <h2 class="sheet-title">Settings</h2>
+        <div class="setting">
+          <div><b>Notifications</b><p id="notify-state" class="hint"></p></div>
+          <button id="notify-btn" class="ghost small">Turn on</button>
+        </div>
+        <label>Holidays
+          <select id="s-holidays">
+            <option value="auto">Automatic (from your device)</option>
+            <option value="US">United States</option>
+            <option value="CA">Canada</option>
+            <option value="GB">United Kingdom</option>
+            <option value="off">Don't show holidays</option>
+          </select>
+        </label>
+        <label class="check-row"><input type="checkbox" id="s-observances" /> Also show other important days (Mother's Day, Halloween, clocks changing…)</label>
+        <div class="row actions"><button id="settings-close" class="primary">Done</button></div>
+      </div>
+    </div>
+
+    <div class="preview" id="choice" hidden>
+      <div class="preview-card">
+        <p id="choice-text" class="choice-text"></p>
+        <div id="choice-buttons" class="choice-buttons"></div>
       </div>
     </div>
 

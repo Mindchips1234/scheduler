@@ -1,5 +1,5 @@
 // Offline support: network-first for pages, cache-first for everything else.
-const CACHE = 'scheduler-v3';
+const CACHE = 'scheduler-v4';
 
 // Tapping a notification focuses the app (or opens it) and jumps to that item.
 self.addEventListener('notificationclick', (e) => {

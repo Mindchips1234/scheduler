@@ -1,5 +1,6 @@
 import * as chrono from 'chrono-node';
 import { defaultAlert } from './reminders.js';
+import { replaceHolidayNames } from './holidays.js';
 
 /**
  * Turns a spoken/typed sentence into a command.
@@ -94,9 +95,115 @@ function startOfDay(d) {
   return x;
 }
 
-export function parseCommand(input, ref = new Date()) {
-  const text = (input || '').trim();
-  if (!text) return { action: 'none' };
+// ---------- repeats ----------
+
+const DAY_WORD = '(?:sun|mon|tues|wednes|thurs|fri|satur)days?';
+const DAY_LIST = `${DAY_WORD}(?:\\s*(?:,\\s*and|,|and|&|\\+)\\s*${DAY_WORD})*`;
+const INTERVAL = '(other|\\d+|two|three|four|five|six)';
+const dayIndex = (w) => ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(w.slice(0, 3).toLowerCase());
+const intervalOf = (w) => (!w ? 1 : w.toLowerCase() === 'other' ? 2 : NUMBER_WORDS[w.toLowerCase()] ?? parseInt(w, 10));
+const TIME_OF_DAY = { morning: 8, afternoon: 14, evening: 18, night: 21 };
+
+function cut(text, m) {
+  return (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Pulls a repeat rule out of the text:
+ *   "every day", "every other week", "every 3 months", "every weekday", "every Monday and Wednesday",
+ *   "on Tuesdays", "every morning", "daily", "weekly", "monthly", "yearly", "annually".
+ */
+export function extractRepeat(text) {
+  let m;
+
+  if ((m = text.match(/\b(?:every|each)\s+(?:single\s+)?(week\s?days?|work\s?days?|weekends?)\b/i)) ||
+      (m = text.match(/\bon\s+(weekdays|weekends)\b/i))) {
+    const byDay = /end/i.test(m[1]) ? [0, 6] : [1, 2, 3, 4, 5];
+    return { repeat: { freq: 'weekly', interval: 1, byDay }, text: cut(text, m) };
+  }
+
+  if ((m = text.match(new RegExp(`\\b(?:every|each)\\s+(?:${INTERVAL}\\s+)?(${DAY_LIST})\\b`, 'i'))) ||
+      (m = text.match(new RegExp(`\\bon\\s+()((?:${DAY_WORD.replace('days?', 'days')})(?:\\s*(?:,\\s*and|,|and|&)\\s*${DAY_WORD.replace('days?', 'days')})*)\\b`, 'i')))) {
+    const byDay = [...new Set((m[2].match(new RegExp(DAY_WORD, 'gi')) || []).map(dayIndex))].sort();
+    const repeat = { freq: 'weekly', interval: intervalOf(m[1]) };
+    if (byDay.length) repeat.byDay = byDay;
+    return { repeat, text: cut(text, m) };
+  }
+
+  if ((m = text.match(new RegExp(`\\b(?:every|each)\\s+(?:${INTERVAL}\\s+)?(day|night|morning|afternoon|evening|week|fortnight|month|year)s?\\b`, 'i')))) {
+    const unit = m[2].toLowerCase();
+    let repeat;
+    if (unit === 'fortnight') repeat = { freq: 'weekly', interval: 2 * intervalOf(m[1]) };
+    else if (TIME_OF_DAY[unit] != null) repeat = { freq: 'daily', interval: intervalOf(m[1]), defaultHour: TIME_OF_DAY[unit] };
+    else repeat = { freq: unit === 'day' ? 'daily' : `${unit}ly`, interval: intervalOf(m[1]) };
+    return { repeat, text: cut(text, m) };
+  }
+
+  if ((m = text.match(/\b(daily|nightly|weekly|bi-?weekly|fortnightly|monthly|yearly|annually|annual)\b/i))) {
+    const w = m[1].toLowerCase().replace('-', '');
+    const repeat =
+      w === 'daily' ? { freq: 'daily', interval: 1 } :
+      w === 'nightly' ? { freq: 'daily', interval: 1, defaultHour: 21 } :
+      w === 'weekly' ? { freq: 'weekly', interval: 1 } :
+      w === 'biweekly' || w === 'fortnightly' ? { freq: 'weekly', interval: 2 } :
+      w === 'monthly' ? { freq: 'monthly', interval: 1 } :
+      { freq: 'yearly', interval: 1 };
+    // Keep the word in the title when it's an adjective ("weekly meeting"), drop it otherwise.
+    const adjective = /^\s+(?:meeting|call|check-?in|review|report|sync|standup|lesson|class|checkup|check-up|physical|appointment|exam)\b/i.test(text.slice(m.index + m[0].length));
+    return { repeat, text: adjective ? text : cut(text, m) };
+  }
+
+  return { repeat: null, text };
+}
+
+/** Pulls "until March 1" / "through June" / "for 6 weeks" out of the text. */
+export function extractUntil(text, ref = new Date()) {
+  const forCount = text.match(/\bfor\s+(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|years?)\b/i);
+  if (forCount) {
+    const raw = forCount[1].toLowerCase();
+    return { until: null, count: { n: NUMBER_WORDS[raw] ?? parseInt(raw, 10), unit: forCount[2].toLowerCase().replace(/s$/, '') }, text: cut(text, forCount) };
+  }
+  const m = text.match(/\b(?:until|till|til|through|thru|ending(?:\s+on)?)\s+/i);
+  if (!m) return { until: null, count: null, text };
+  const after = text.slice(m.index + m[0].length);
+  const r = chrono.parse(after, ref, { forwardDate: true })[0];
+  if (!r || r.index !== 0) return { until: null, count: null, text };
+  const end = m.index + m[0].length + r.text.length;
+  return { until: startOfDay(r.start.date()), count: null, text: (text.slice(0, m.index) + ' ' + text.slice(end)).replace(/\s{2,}/g, ' ').trim() };
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** "on the 15th" (no month given) -> the next 15th, written as a plain date. */
+function replaceDayOfMonth(text, ref) {
+  const m = text.match(/\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)\b(?!\s+of\b)/i);
+  if (!m) return text;
+  const day = parseInt(m[1], 10);
+  if (day < 1 || day > 31) return text;
+  let d = new Date(ref.getFullYear(), ref.getMonth(), day);
+  if (d.getDate() !== day || d < startOfDay(ref)) {
+    for (let i = 1; i <= 12; i++) {
+      d = new Date(ref.getFullYear(), ref.getMonth() + i, day);
+      if (d.getDate() === day) break;
+    }
+  }
+  return cut(text, m) + ` on ${MONTH_NAMES[d.getMonth()]} ${day} ${d.getFullYear()}`;
+}
+
+function addUnits(date, n, unit) {
+  const d = new Date(date);
+  if (unit === 'day') d.setDate(d.getDate() + n);
+  if (unit === 'week') d.setDate(d.getDate() + 7 * n);
+  if (unit === 'month') d.setMonth(d.getMonth() + n);
+  if (unit === 'year') d.setFullYear(d.getFullYear() + n);
+  return d;
+}
+
+export function parseCommand(input, ref = new Date(), { region = 'US' } = {}) {
+  const original = (input || '').trim();
+  if (!original) return { action: 'none' };
+  // "on Thanksgiving" -> "on November 26 2026" so the date parser understands it.
+  const text = replaceHolidayNames(original, ref, region).text;
 
   // Questions about the schedule.
   if (/^(?:what(?:'s| is| do i have| have i got)|show(?: me)?|list|read|anything)\b/i.test(text)) {
@@ -120,8 +227,11 @@ export function parseCommand(input, ref = new Date()) {
 
   // Everything else is something to add.
   const { alertMinutes, text: noAlert } = extractAlert(text);
-  const type = detectType(noAlert);
-  const { minutes, text: noDuration } = extractDuration(noAlert);
+  const { repeat: parsedRepeat, text: noRepeat } = extractRepeat(noAlert);
+  const untilInfo = parsedRepeat ? extractUntil(noRepeat, ref) : { until: null, count: null, text: noRepeat };
+  const type = detectType(untilInfo.text);
+  const { minutes, text: durationless } = extractDuration(untilInfo.text);
+  const noDuration = replaceDayOfMonth(durationless, ref);
   const results = chrono.parse(noDuration, ref, { forwardDate: true });
 
   let title = noDuration;
@@ -133,7 +243,12 @@ export function parseCommand(input, ref = new Date()) {
     const r = results[0];
     start = r.start.date();
     allDay = !r.start.isCertain('hour');
-    if (r.end) end = r.end.date();
+    // "at 4" with no am/pm almost always means the afternoon.
+    if (!allDay && !r.start.isCertain('meridiem') && start.getHours() >= 1 && start.getHours() <= 6) {
+      start.setHours(start.getHours() + 12);
+      if (r.end) end = new Date(r.end.date().getTime() + 12 * 3600000);
+    }
+    if (r.end && !end) end = r.end.date();
     // Remove every date phrase from the title, last first so indexes stay valid.
     for (const res of [...results].reverse()) {
       title = title.slice(0, res.index) + ' ' + title.slice(res.index + res.text.length);
@@ -141,11 +256,36 @@ export function parseCommand(input, ref = new Date()) {
   }
 
   if (allDay && start) start = startOfDay(start);
-  if (!end && start && !allDay && minutes) end = new Date(start.getTime() + minutes * 60000);
-  if (!end && start && !allDay && type === 'event') end = new Date(start.getTime() + 60 * 60000);
 
   title = capitalize(stripFiller(title.replace(/\s{2,}/g, ' ')));
   if (!title) title = type === 'reminder' ? 'Reminder' : type === 'task' ? 'Task' : 'Event';
+
+  // Birthdays and anniversaries repeat every year unless told otherwise.
+  let repeat = parsedRepeat;
+  if (!repeat && start && /\b(?:birthday|bday|anniversary)\b/i.test(title)) repeat = { freq: 'yearly', interval: 1 };
+
+  if (repeat) {
+    const { defaultHour, ...rule } = repeat;
+    repeat = rule;
+    if (!start) start = startOfDay(ref);
+    if (allDay && defaultHour != null) {
+      start = new Date(start.getFullYear(), start.getMonth(), start.getDate(), defaultHour);
+      allDay = false;
+    }
+    // Move the first occurrence onto one of the chosen weekdays.
+    if (repeat.byDay) {
+      for (let i = 0; i < 7 && !repeat.byDay.includes(start.getDay()); i++) start.setDate(start.getDate() + 1);
+    }
+    if (untilInfo.until) repeat.until = untilInfo.until.toISOString();
+    if (untilInfo.count) {
+      const u = addUnits(startOfDay(start), untilInfo.count.n, untilInfo.count.unit);
+      u.setDate(u.getDate() - 1);
+      repeat.until = u.toISOString();
+    }
+  }
+
+  if (!end && start && !allDay && minutes) end = new Date(start.getTime() + minutes * 60000);
+  if (!end && start && !allDay && type === 'event') end = new Date(start.getTime() + 60 * 60000);
 
   const item = {
     title,
@@ -153,8 +293,9 @@ export function parseCommand(input, ref = new Date()) {
     start: start ? start.toISOString() : null,
     end: end ? end.toISOString() : null,
     allDay,
+    repeat: repeat || null,
   };
   item.alertMinutes = start ? (alertMinutes ?? defaultAlert(item)) : null;
 
-  return { action: 'add', item, heard: text };
+  return { action: 'add', item, heard: original };
 }

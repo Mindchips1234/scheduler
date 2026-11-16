@@ -7,6 +7,8 @@
   --accent: #4f46e5;
   --accent-soft: #eef0ff;
   --danger: #dc2626;
+  --holiday: #d9480f;
+  --holiday-soft: #fff1e8;
   color-scheme: light;
 }
 
@@ -19,6 +21,8 @@
     --line: #2c2c3a;
     --accent: #818cf8;
     --accent-soft: #262a4a;
+    --holiday: #ff8a4c;
+    --holiday-soft: #3a2418;
     color-scheme: dark;
   }
 }
@@ -77,7 +81,35 @@ main { max-width: 640px; margin: 0 auto; padding: 12px 16px 200px; }
 .item .when { font-size: .85rem; color: var(--muted); }
 .item.done .title { text-decoration: line-through; color: var(--muted); }
 .check, .del, .ics { border: 0; background: none; font-size: 1.2rem; padding: 4px; }
-.bell { font-size: 1.2rem; }
+.gear { font-size: 1.2rem; }
+
+/* holidays */
+.day { position: relative; }
+.day.holiday b { color: var(--holiday); font-weight: 700; }
+.day.holiday::after, .day.observance::after {
+  content: ''; position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--holiday);
+}
+.day.observance::after { background: none; border: 1.5px solid var(--holiday); width: 5px; height: 5px; }
+.day.selected.holiday b { color: #fff; }
+.day.selected::after { border-color: #fff; background-color: transparent; }
+.day.selected.holiday::after { background: #fff; }
+.holiday-item { background: var(--holiday-soft); border-color: transparent; }
+.holiday-item .check { cursor: default; }
+
+/* sheets */
+.preview-card [hidden] { display: none; }
+.sheet-title { margin: 0; font-size: 1.1rem; }
+.setting { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.setting .hint { margin: 2px 0 0; font-size: .85rem; color: var(--muted); }
+.small { padding: 8px 14px; border-radius: 10px; flex: none; }
+.preview-card .check-row input { width: 18px; }
+.preview-card .check-row { display: flex; align-items: flex-start; gap: 10px; font-size: .9rem; color: var(--text); }
+.check-row input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.choice-text { margin: 0; font-weight: 600; }
+.choice-buttons { display: grid; gap: 8px; }
+.choice-buttons button { padding: 12px; border-radius: 12px; font-weight: 600; }
+.danger { background: var(--danger); color: #fff; border: 0; }
 .del { color: var(--muted); }
 .empty { color: var(--muted); padding: 8px 4px; }
 
@@ -112,10 +144,11 @@ main { max-width: 640px; margin: 0 auto; padding: 12px 16px 200px; }
 .preview-card {
   width: 100%; max-width: 640px; background: var(--surface);
   border-radius: 20px 20px 0 0; padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px);
-  display: grid; gap: 12px;
+  display: grid; gap: 12px; max-height: 92vh; overflow-y: auto;
 }
-.preview-card label { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); flex: 1; }
+.preview-card label { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); flex: 1 1 0; min-width: 0; }
 .preview-card input, .preview-card select {
+  width: 100%; min-width: 0;
   border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 10px 12px; font-size: 1rem; color: var(--text);
 }
 .heard { margin: 0; font-style: italic; color: var(--muted); font-size: .9rem; }

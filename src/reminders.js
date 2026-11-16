@@ -1,4 +1,5 @@
 // Pure reminder logic (no DOM), so it can be unit-tested in Node.
+import { toRRule } from './recurrence.js';
 
 /** All-day items alert at this hour of the day (minus the alert offset). */
 export const ALL_DAY_ALERT_HOUR = 9;
@@ -94,6 +95,14 @@ export function buildIcs(ev, now = new Date()) {
     lines.push(`DTSTART:${utcStamp(start)}`, `DTEND:${utcStamp(end)}`);
   }
   lines.push(`SUMMARY:${esc(ev.title)}`);
+  if (ev.repeat) {
+    lines.push(`RRULE:${toRRule(ev.repeat, ev.allDay)}`);
+    for (const k of ev.skip || []) {
+      const [y, m, d] = k.split('-').map(Number);
+      if (ev.allDay) lines.push(`EXDATE;VALUE=DATE:${k.replace(/-/g, '')}`);
+      else lines.push(`EXDATE:${utcStamp(new Date(y, m - 1, d, start.getHours(), start.getMinutes()))}`);
+    }
+  }
   if (ev.alertMinutes != null && ev.alertMinutes !== '') {
     // Trigger is relative to DTSTART (midnight for all-day items).
     const offset = ev.allDay ? ALL_DAY_ALERT_HOUR * 60 - Number(ev.alertMinutes) : -Number(ev.alertMinutes);
