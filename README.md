@@ -11,10 +11,20 @@ A phone-friendly calendar you control with your voice. Tap the mic, say what's h
 | "Remind me to call mom tomorrow at 5" | Adds a reminder 🔔 |
 | "Essay due Friday" | Adds an all-day task ✅ |
 | "Mom's birthday on December 3rd" | Adds an all-day event |
+| "Dentist Tuesday at 3, remind me 30 minutes before" | Event with an alert 30 min early |
+| "Flight Friday at 7am, alert me the day before" | Event with an alert 1 day early |
 | "What do I have tomorrow?" | Jumps to that day and reads it out |
 | "Cancel the dentist" | Finds and deletes it (asks first) |
 
 Every new item opens a confirm card so you can fix the title, date, time or type before saving. You can also type commands instead of speaking.
+
+## Reminder notifications
+
+- Tap the 🔕 bell (top right) to allow notifications. It turns into 🔔 when they're on.
+- Every timed item can have an alert, which you pick on the confirm card. Defaults: reminders alert at their time, timed events alert 10 minutes before, and all-day items have no alert. All-day items that do have an alert go off at 9:00 AM.
+- Alerts are shown by the app itself, so **they only fire while Scheduler is open or was used recently**. Phone browsers pause web apps in the background, and there's no server to push alerts to you. Alerts you missed by more than an hour are listed when you reopen the app instead of popping up late.
+- **For a guaranteed alarm**, tap 📲 on an item. It downloads a calendar file (.ics) with the alarm included; open it to add the item to your phone's own calendar.
+- **iPhone:** notifications only work after you *Add to Home Screen* and open Scheduler from that icon (iOS 16.4+).
 
 ## How it works
 
@@ -44,6 +54,7 @@ Pushing to `main` runs the tests and deploys to GitHub Pages via `.github/workfl
 index.html            app shell
 src/main.js           UI: month grid, day agenda, confirm card
 src/parser.js         sentence -> add / query / delete command
+src/reminders.js      alert timing + .ics export
 src/store.js          events in localStorage
 src/voice.js          speech recognition + read-aloud
 public/sw.js          offline cache
@@ -52,7 +63,7 @@ public/manifest.webmanifest
 
 ## Ideas for next steps
 
-- Notifications for reminders
+- Background push notifications (needs a small push server)
 - Recurring events ("every Monday at 9")
 - Editing existing events by voice ("move dentist to Thursday")
 - Export / import (.ics) or Google Calendar sync

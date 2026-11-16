@@ -1,5 +1,21 @@
 // Offline support: network-first for pages, cache-first for everything else.
-const CACHE = 'scheduler-v1';
+const CACHE = 'scheduler-v2';
+
+// Tapping a notification focuses the app (or opens it) and jumps to that item.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const id = e.notification.data && e.notification.data.id;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      const client = clients[0];
+      if (client) {
+        client.postMessage({ type: 'open-item', id });
+        return client.focus();
+      }
+      return self.clients.openWindow(self.registration.scope);
+    }),
+  );
+});
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {

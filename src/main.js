@@ -2,6 +2,7 @@ import './style.css';
 import { parseCommand } from './parser.js';
 import { store, sameDay } from './store.js';
 import { listen, speak, voiceSupported } from './voice.js';
+import { ALERT_OPTIONS, describeAlert, dueAlerts, nextAlert, buildIcs } from './reminders.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -57,10 +58,14 @@ function renderGrid() {
 }
 
 function itemHtml(e) {
-  const when = e.allDay || !e.start ? 'All day' : fmtTime.format(new Date(e.start)) + (e.end ? ' – ' + fmtTime.format(new Date(e.end)) : '');
+  let when = e.allDay || !e.start ? 'All day' : fmtTime.format(new Date(e.start)) + (e.end ? ' – ' + fmtTime.format(new Date(e.end)) : '');
+  const alert = describeAlert(e.alertMinutes);
+  if (alert && e.start) when += ` · 🔔 ${alert}`;
+  const ics = e.start ? '<button class="ics" data-act="ics" aria-label="Add to phone calendar" title="Add to phone calendar">📲</button>' : '';
   return `<li class="item ${e.done ? 'done' : ''}" data-id="${e.id}">
     <button class="check" data-act="toggle" aria-label="Mark done">${TYPE_ICON[e.type] || '📅'}</button>
     <div class="body"><span class="title"></span><span class="when">${when}</span></div>
+    ${ics}
     <button class="del" data-act="delete" aria-label="Delete">✕</button>
   </li>`;
 }
@@ -105,6 +110,11 @@ function openPreview(item, heard) {
   $('heard').textContent = heard ? `Heard: “${heard}”` : '';
   $('p-title').value = item.title;
   $('p-type').value = item.type;
+  const alertVal = item.alertMinutes == null ? '' : String(item.alertMinutes);
+  const opts = [...ALERT_OPTIONS];
+  if (!opts.some((o) => o.value === alertVal)) opts.push({ value: alertVal, label: describeAlert(alertVal) });
+  $('p-alert').innerHTML = opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+  $('p-alert').value = alertVal;
   if (item.start) {
     const d = new Date(item.start);
     $('p-date').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -143,13 +153,98 @@ function savePreview() {
     }
     start = s.toISOString();
   }
-  const ev = store.add({ title, type: $('p-type').value, start, end, allDay });
+  const alertStr = $('p-alert').value;
+  const alertMinutes = start && alertStr !== '' ? Number(alertStr) : null;
+  const ev = store.add({ title, type: $('p-type').value, start, end, allDay, alertMinutes, notified: false });
   closePreview();
   if (ev.start) selectDate(new Date(ev.start));
   else render();
   const msg = `Saved “${ev.title}”${ev.start ? ' for ' + describe(ev) : ''}.`;
   setStatus(msg);
   speak(msg);
+  // Ask for notification permission the first time an alert is set (this runs inside the Save tap).
+  if (alertMinutes != null && notifySupported() && Notification.permission === 'default') requestNotify();
+  checkAlerts();
+}
+
+// ---------- notifications ----------
+
+const notifySupported = () => 'Notification' in window;
+const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function updateBell() {
+  const on = notifySupported() && Notification.permission === 'granted';
+  $('bell').textContent = on ? '🔔' : '🔕';
+  $('bell').setAttribute('aria-label', on ? 'Notifications on' : 'Turn on notifications');
+}
+
+async function requestNotify() {
+  if (!notifySupported()) {
+    setStatus(isIos && !isStandalone()
+      ? 'On iPhone, notifications only work after you add Scheduler to your Home Screen (Share → Add to Home Screen) and open it from there.'
+      : 'This browser can’t show notifications. Use 📲 on an item to add it to your phone’s calendar instead.');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    setStatus('Notifications are blocked. Turn them on for this site in your browser settings.');
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    notify({ id: 'test', title: 'Notifications are on', body: 'Scheduler will alert you while the app is open or recently used.' });
+    return;
+  }
+  const result = await Notification.requestPermission();
+  updateBell();
+  setStatus(result === 'granted'
+    ? 'Notifications on. Alerts show while Scheduler is open or recently used — tap 📲 on an item for a guaranteed phone-calendar alarm.'
+    : 'Notifications not allowed. You can still use 📲 to add items to your phone’s calendar.');
+}
+
+async function notify({ id, title, body }) {
+  const options = { body, tag: id, icon: './icon.svg', badge: './icon.svg', renotify: true, data: { id } };
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) return await reg.showNotification(title, options);
+  } catch { /* fall through */ }
+  try { new Notification(title, options); } catch { /* not allowed in this context */ }
+}
+
+let alertTimer = null;
+
+function checkAlerts() {
+  const events = store.all();
+  const { show, missed } = dueAlerts(events);
+  const canNotify = notifySupported() && Notification.permission === 'granted';
+
+  for (const ev of show) {
+    store.update(ev.id, { notified: true }); // mark first so two tabs don't both alert
+    const body = ev.allDay ? 'Today' : fmtTime.format(new Date(ev.start)) + (ev.alertMinutes ? ` (${describeAlert(ev.alertMinutes)})` : '');
+    if (canNotify) notify({ id: ev.id, title: `${TYPE_ICON[ev.type] || '🔔'} ${ev.title}`, body });
+    if (document.visibilityState === 'visible') speak(`Reminder: ${ev.title}`);
+  }
+  for (const ev of missed) store.update(ev.id, { notified: true });
+  if (show.length) setStatus('🔔 ' + show.map((e) => e.title).join(', '));
+  else if (missed.length) setStatus(`While you were away: ${missed.map((e) => e.title).join(', ')}.`);
+  if (show.length || missed.length) render();
+
+  // Wake up exactly when the next alert is due (capped; also re-checked every 30s).
+  clearTimeout(alertTimer);
+  const next = nextAlert(store.all());
+  if (next) alertTimer = setTimeout(checkAlerts, Math.min(Math.max(next - Date.now(), 0) + 250, 2 ** 31 - 1));
+}
+
+function downloadIcs(ev) {
+  const blob = new Blob([buildIcs(ev)], { type: 'text/calendar' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (ev.title.replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '') || 'event') + '.ics';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  setStatus('Open the downloaded file to add it (with its alarm) to your phone’s calendar.');
 }
 
 function describe(ev) {
@@ -210,13 +305,15 @@ document.querySelector('.agenda').onclick = (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const id = btn.closest('.item').dataset.id;
+  const ev = store.all().find((x) => x.id === id);
+  if (!ev) return;
+  if (btn.dataset.act === 'ics') return downloadIcs(ev);
   if (btn.dataset.act === 'delete') store.remove(id);
-  if (btn.dataset.act === 'toggle') {
-    const ev = store.all().find((x) => x.id === id);
-    store.update(id, { done: !ev.done });
-  }
+  if (btn.dataset.act === 'toggle') store.update(id, { done: !ev.done });
   render();
 };
+
+$('bell').onclick = requestNotify;
 
 $('p-save').onclick = savePreview;
 $('p-cancel').onclick = () => { closePreview(); setStatus('Cancelled.'); };
@@ -259,5 +356,16 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
+// Opened from a notification tap: jump to that item's day.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type !== 'open-item') return;
+  const ev = store.all().find((x) => x.id === e.data.id);
+  if (ev?.start) selectDate(new Date(ev.start));
+});
+
 renderWeekdays();
 render();
+updateBell();
+checkAlerts();
+setInterval(checkAlerts, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlerts(); });

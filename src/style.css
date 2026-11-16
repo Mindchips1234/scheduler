@@ -38,15 +38,15 @@ button { cursor: pointer; }
 
 .topbar {
   position: sticky; top: 0; z-index: 2;
-  display: flex; align-items: center; gap: 8px;
-  padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+  display: flex; align-items: center; gap: 4px;
+  padding: calc(env(safe-area-inset-top) + 10px) 12px 10px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
-.topbar h1 { flex: 1; margin: 0; font-size: 1.15rem; text-align: center; }
-.icon-btn { border: 0; background: none; font-size: 1.6rem; width: 40px; height: 40px; border-radius: 50%; }
+.topbar h1 { flex: 1; min-width: 0; margin: 0; font-size: 1.1rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.icon-btn { flex: none; border: 0; background: none; font-size: 1.6rem; width: 38px; height: 38px; padding: 0; border-radius: 50%; }
 .icon-btn:active { background: var(--accent-soft); }
-.today-btn { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 4px 12px; font-size: .85rem; }
+.today-btn { flex: none; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 4px 12px; font-size: .85rem; }
 
 main { max-width: 640px; margin: 0 auto; padding: 12px 16px 200px; }
 
@@ -76,7 +76,8 @@ main { max-width: 640px; margin: 0 auto; padding: 12px 16px 200px; }
 .item .title { font-weight: 600; overflow-wrap: anywhere; }
 .item .when { font-size: .85rem; color: var(--muted); }
 .item.done .title { text-decoration: line-through; color: var(--muted); }
-.check, .del { border: 0; background: none; font-size: 1.2rem; padding: 4px; }
+.check, .del, .ics { border: 0; background: none; font-size: 1.2rem; padding: 4px; }
+.bell { font-size: 1.2rem; }
 .del { color: var(--muted); }
 .empty { color: var(--muted); padding: 8px 4px; }
 

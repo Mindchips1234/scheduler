@@ -1,4 +1,5 @@
 import * as chrono from 'chrono-node';
+import { defaultAlert } from './reminders.js';
 
 /**
  * Turns a spoken/typed sentence into a command.
@@ -60,6 +61,27 @@ export function extractDuration(text) {
   return { minutes, text: (text.slice(0, m.index) + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, ' ').trim() };
 }
 
+/**
+ * Pulls "remind me 30 minutes before" / "with an alert an hour before" /
+ * "alert me the day before" out of the text. Returns minutes before the start.
+ */
+export function extractAlert(text) {
+  const lead = String.raw`(?:,?\s*(?:and\s+)?)(?:remind me|alert me|notify me|warn me|ping me|with an? (?:reminder|alert|notification)|set an? (?:reminder|alert))`;
+  const amount = String.raw`(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|half)\s*(?:an?\s+)?(minutes?|mins?|hours?|hrs?|days?)`;
+  const re = new RegExp(`${lead}\\s+(?:${amount}|the (day|night) )\\s*(?:before|early|ahead|beforehand)?\\b`, 'i');
+  const m = text.match(re);
+  if (!m) return { alertMinutes: null, text };
+  let minutes;
+  if (m[3]) {
+    minutes = 1440;
+  } else {
+    const raw = m[1].toLowerCase();
+    const n = NUMBER_WORDS[raw] ?? parseFloat(raw);
+    minutes = /^d/i.test(m[2]) ? n * 1440 : /^h/i.test(m[2]) ? n * 60 : n;
+  }
+  return { alertMinutes: minutes, text: (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, ' ').trim() };
+}
+
 function detectType(text) {
   if (/\bremind(?:er| me)?\b/i.test(text)) return 'reminder';
   if (/\b(?:task|to-?do|to do|deadline|due|finish|submit)\b/i.test(text)) return 'task';
@@ -97,8 +119,9 @@ export function parseCommand(input, ref = new Date()) {
   }
 
   // Everything else is something to add.
-  const type = detectType(text);
-  const { minutes, text: noDuration } = extractDuration(text);
+  const { alertMinutes, text: noAlert } = extractAlert(text);
+  const type = detectType(noAlert);
+  const { minutes, text: noDuration } = extractDuration(noAlert);
   const results = chrono.parse(noDuration, ref, { forwardDate: true });
 
   let title = noDuration;
@@ -124,15 +147,14 @@ export function parseCommand(input, ref = new Date()) {
   title = capitalize(stripFiller(title.replace(/\s{2,}/g, ' ')));
   if (!title) title = type === 'reminder' ? 'Reminder' : type === 'task' ? 'Task' : 'Event';
 
-  return {
-    action: 'add',
-    item: {
-      title,
-      type,
-      start: start ? start.toISOString() : null,
-      end: end ? end.toISOString() : null,
-      allDay,
-    },
-    heard: text,
+  const item = {
+    title,
+    type,
+    start: start ? start.toISOString() : null,
+    end: end ? end.toISOString() : null,
+    allDay,
   };
+  item.alertMinutes = start ? (alertMinutes ?? defaultAlert(item)) : null;
+
+  return { action: 'add', item, heard: text };
 }

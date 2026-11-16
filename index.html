@@ -17,6 +17,7 @@
       <h1 id="month-label">Scheduler</h1>
       <button class="icon-btn" id="next" aria-label="Next month">›</button>
       <button class="today-btn" id="today">Today</button>
+      <button class="icon-btn bell" id="bell" aria-label="Notifications">🔕</button>
     </header>
 
     <main>
@@ -43,13 +44,16 @@
           <label>Date <input id="p-date" type="date" /></label>
           <label>Time <input id="p-time" type="time" /></label>
         </div>
-        <label>Type
-          <select id="p-type">
-            <option value="event">Event</option>
-            <option value="reminder">Reminder</option>
-            <option value="task">Task</option>
-          </select>
-        </label>
+        <div class="row">
+          <label>Type
+            <select id="p-type">
+              <option value="event">Event</option>
+              <option value="reminder">Reminder</option>
+              <option value="task">Task</option>
+            </select>
+          </label>
+          <label>Alert <select id="p-alert"></select></label>
+        </div>
         <div class="row actions">
           <button id="p-cancel" class="ghost">Cancel</button>
           <button id="p-save" class="primary">Save</button>
