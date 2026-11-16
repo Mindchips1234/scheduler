@@ -1,0 +1,19 @@
+{
+  "name": "scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A phone-friendly calendar you control with your voice.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "test": "node --test src/"
+  },
+  "dependencies": {
+    "chrono-node": "^2.7.7"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}
