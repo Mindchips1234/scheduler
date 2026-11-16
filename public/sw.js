@@ -1,5 +1,5 @@
 // Offline support: network-first for pages, cache-first for everything else.
-const CACHE = 'scheduler-v2';
+const CACHE = 'scheduler-v3';
 
 // Tapping a notification focuses the app (or opens it) and jumps to that item.
 self.addEventListener('notificationclick', (e) => {
@@ -32,7 +32,8 @@ self.addEventListener('fetch', (e) => {
 
   if (req.mode === 'navigate') {
     e.respondWith(
-      fetch(req)
+      // no-cache: always revalidate the page so new versions show up right away.
+      fetch(req, { cache: 'no-cache' })
         .then((res) => {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
