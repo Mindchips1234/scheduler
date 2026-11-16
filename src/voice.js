@@ -16,30 +16,48 @@ export function listen({ onInterim, onFinal, onError, onEnd }) {
   rec.continuous = false;
   rec.maxAlternatives = 1;
 
-  let finalText = '';
+  // Rebuilt from all results each time, so words that were never marked "final"
+  // (common when you tap the mic again to stop) are still kept.
+  let heard = '';
   rec.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalText += t;
-      else interim += t;
-    }
-    onInterim?.((finalText + interim).trim());
+    let text = '';
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    heard = text.trim();
+    onInterim?.(heard);
   };
   rec.onerror = (e) => {
+    if (e.error === 'aborted') return; // we stopped it ourselves
+    if (e.error === 'no-speech' && heard) return;
     const msg = {
       'not-allowed': 'Microphone permission was denied. Allow it in your browser settings.',
+      'service-not-allowed': 'Microphone permission was denied. Allow it in your browser settings.',
       'no-speech': "Didn't hear anything. Tap the mic and try again.",
       'network': 'Speech recognition needs an internet connection on this device.',
     }[e.error] || `Voice error: ${e.error}`;
     onError?.(msg);
   };
+  let ended = false;
   rec.onend = () => {
-    if (finalText.trim()) onFinal?.(finalText.trim());
+    if (ended) return;
+    ended = true;
+    if (heard) onFinal?.(heard);
     onEnd?.();
   };
-  rec.start();
-  return { stop: () => rec.stop() };
+  try {
+    rec.start();
+  } catch {
+    onError?.('Could not start the microphone. Try again.');
+    ended = true;
+    onEnd?.();
+    return { stop() {} };
+  }
+  return {
+    stop() {
+      try { rec.stop(); } catch { /* already stopped */ }
+      // Some phones never fire "end" after a manual stop; finish anyway.
+      setTimeout(() => rec.onend(), 1500);
+    },
+  };
 }
 
 /** Reads text aloud, if the device supports it. */

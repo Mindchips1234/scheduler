@@ -14,6 +14,7 @@ const state = {
   selected: new Date(),
   pending: null, // parsed item waiting for Save
   listening: null,
+  listenId: 0,
 };
 
 const fmtMonth = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
@@ -452,12 +453,26 @@ $('p-save').onclick = savePreview;
 $('p-cancel').onclick = () => { closePreview(); setStatus('Cancelled.'); };
 $('p-repeat').onchange = () => { $('p-until-wrap').hidden = $('p-repeat').value === 'none'; };
 
+function updateEnter() {
+  $('enter').disabled = !$('text-input').value.trim();
+}
+
 function submitText() {
-  const text = $('text-input').value;
+  if (state.listening) {
+    state.listenId++; // ignore anything the mic reports after this
+    state.listening.stop();
+  }
+  const text = $('text-input').value.trim();
+  if (!text) {
+    setStatus('Say something with the mic or type it first.');
+    return;
+  }
   $('text-input').value = '';
   $('text-input').blur();
+  updateEnter();
   handle(text);
 }
+$('text-input').addEventListener('input', updateEnter);
 $('text-form').onsubmit = (e) => { e.preventDefault(); submitText(); };
 $('text-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submitText(); }
@@ -469,14 +484,27 @@ $('mic').onclick = () => {
     return;
   }
   $('mic').classList.add('on');
-  setStatus('Listening…');
+  $('mic').setAttribute('aria-label', 'Stop listening');
+  setStatus('Listening… tap the mic again when you’re done.');
+  // What you say goes into the text box, so you can check or fix it, then tap Enter.
+  const before = $('text-input').value.trim();
+  const id = ++state.listenId;
+  const show = (t) => {
+    if (id !== state.listenId) return false;
+    $('text-input').value = before ? `${before} ${t}` : t;
+    updateEnter();
+    return true;
+  };
   state.listening = listen({
-    onInterim: (t) => setStatus(`“${t}”`),
-    onFinal: handle,
+    onInterim: show,
+    onFinal: (t) => {
+      if (show(t)) setStatus('Got it. Tap ➤ Enter to add it, or fix the text first.');
+    },
     onError: setStatus,
     onEnd: () => {
       state.listening = null;
       $('mic').classList.remove('on');
+      $('mic').setAttribute('aria-label', 'Speak a command');
     },
   });
 };
@@ -507,6 +535,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 
 renderWeekdays();
 render();
+updateEnter();
 checkAlerts();
 setInterval(checkAlerts, 30000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlerts(); });
